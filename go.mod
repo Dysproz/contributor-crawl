@@ -8,4 +8,5 @@ require (
 	github.com/google/go-github/v33 v33.0.0
 	github.com/iancoleman/strcase v0.1.3 // indirect
 	github.com/stretchr/testify v1.7.0 // indirect
+	golang.org/x/oauth2 v0.0.0-20180821212333-d2e6202438be
 )

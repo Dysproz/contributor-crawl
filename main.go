@@ -11,6 +11,7 @@ import (
 	retry "github.com/avast/retry-go"
 	"github.com/dnlo/struct2csv"
 	"github.com/google/go-github/v33/github"
+	"golang.org/x/oauth2"
 )
 
 var ctx = context.Background()
@@ -22,7 +23,7 @@ type Contributor struct {
 	TotalContributions int
 	RangeContributions int
 	RangeAdditions     int
-	RandeDeletions     int
+	RangeDeletions     int
 }
 
 // ISOTimeLayout is a sample layout used for time date parse
@@ -34,6 +35,7 @@ func main() {
 	endDateInput := flag.String("end-date", "", "End date to which contributions should be counted. YYYY-MM-DD")
 	outFile := flag.String("out-file", "contributors-crawl-out.csv", "Path to file where output data in CSV format should be written")
 	repository := flag.String("repository", "", "(OPTIONAL) Specific repository to gather contributions from. If left empty then all repositories in organization will be crawled.")
+	OauthToken := flag.String("oauth", "", "OAuth GitHub API token. Standard clients have 60 requests per hour while authorized clients have 15k requests per hour")
 	flag.Parse()
 
 	if *organization == "" {
@@ -51,11 +53,24 @@ func main() {
 		os.Exit(1)
 	}
 
-	client := github.NewClient(nil)
+	var client *github.Client
+	if *OauthToken == "" {
+		client = github.NewClient(nil)
+	} else {
+		ts := oauth2.StaticTokenSource(
+			&oauth2.Token{AccessToken: *OauthToken},
+		)
+		tc := oauth2.NewClient(context.Background(), ts)
+		client = github.NewClient(tc)
+
+	}
 	var contributions []Contributor
 	var repos []*github.Repository
 	if *repository == "" {
-		repos, _, err = client.Repositories.ListByOrg(ctx, *organization, nil)
+		opt := &github.RepositoryListByOrgOptions{ListOptions: github.ListOptions{
+			PerPage: 999999,
+		}}
+		repos, _, err = client.Repositories.ListByOrg(ctx, *organization, opt)
 		if err != nil {
 			log.Fatal("Could not list repositories for organization ", *organization, "; err: ", err)
 			os.Exit(1)
@@ -68,7 +83,6 @@ func main() {
 			},
 		}
 	}
-
 	for _, repo := range repos {
 		var stats []*github.ContributorStats
 		err := retry.Do(
@@ -87,16 +101,18 @@ func main() {
 		log.Println("Successfully contributors for ", *repo.Name, " repository.")
 
 		for _, stat := range stats {
-			adds, dels, commits := countContributionsInTime(stats[0].Weeks, startDate, endDate)
+			adds, dels, commits := countContributionsInTime(stat.Weeks, startDate, endDate)
 			log.Println("Successfully gathered data for contributor ", *stat.Author.Login, " in repository ", *repo.Name)
-			contributions = append(contributions, Contributor{
-				Repository:         *repo.Name,
-				AuthorLogin:        *stat.Author.Login,
-				TotalContributions: *stat.Total,
-				RangeContributions: commits,
-				RangeAdditions:     adds,
-				RandeDeletions:     dels,
-			})
+			if adds != 0 || dels != 0 || commits != 0 {
+				contributions = append(contributions, Contributor{
+					Repository:         *repo.Name,
+					AuthorLogin:        *stat.Author.Login,
+					TotalContributions: *stat.Total,
+					RangeContributions: commits,
+					RangeAdditions:     adds,
+					RangeDeletions:     dels,
+				})
+			}
 		}
 	}
 
@@ -117,6 +133,8 @@ func main() {
 	if err := CSVwriter.WriteAll(CSVData); err != nil {
 		log.Fatal("Could not write CSV data to file with err: ", err)
 	}
+	log.Println("Contribution crawling ended sucessfully! Find your data in file: ", *outFile)
+	os.Exit(0)
 }
 
 func countContributionsInTime(stats []*github.WeeklyStats, startDate, endDate time.Time) (additions, deletions, commits int) {
